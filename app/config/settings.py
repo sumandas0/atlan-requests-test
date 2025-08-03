@@ -1,6 +1,7 @@
-"""Configuration settings for the FastAPI S3 middleware."""
+"""Application settings and configuration."""
 
-from typing import List, Optional
+import os
+from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -9,44 +10,34 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # AWS Configuration
-    aws_role_arn: str = Field(..., description="AWS Role ARN for S3 access")
-    aws_region: str = Field(default="us-east-1", description="AWS region")
+    # Application settings
+    app_name: str = Field(default="Atlan Requests Middleware", description="Application name")
+    app_version: str = Field(default="0.1.0", description="Application version")
+    debug: bool = Field(default=False, description="Debug mode")
     
-    # S3 Configuration
+    # AWS Settings
+    aws_region: str = Field(default="us-east-1", description="AWS region")
+    aws_role_arn: Optional[str] = Field(default=None, description="AWS IAM role ARN to assume")
+    
+    # S3 Settings
     s3_bucket_name: str = Field(..., description="S3 bucket name for storing logs")
     s3_key_prefix: str = Field(default="request-logs/", description="S3 key prefix")
     
-    # Application Configuration
-    log_level: str = Field(default="INFO", description="Application log level")
-    max_body_size: int = Field(
-        default=1048576, description="Maximum body size to log (1MB)"
-    )
-    enable_middleware: bool = Field(
-        default=True, description="Enable/disable S3 logging middleware"
+    # Logging Settings
+    log_level: str = Field(default="INFO", description="Logging level")
+    log_format: str = Field(
+        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        description="Log format"
     )
     
-    # Request timeout for S3 uploads
-    s3_upload_timeout: int = Field(
-        default=30, description="S3 upload timeout in seconds"
-    )
-    
-    # Selective logging configuration
-    log_endpoints: List[str] = Field(
-        default=["/search/indexsearch", "/entity/lineage"],
-        description="List of endpoint patterns to log"
-    )
-    log_methods: List[str] = Field(
-        default=["POST"], 
-        description="List of HTTP methods to log"
-    )
-    endpoint_match_type: str = Field(
-        default="exact",
-        description="Endpoint matching type: 'exact', 'prefix', or 'regex'"
-    )
+    # Middleware Settings
+    enable_request_logging: bool = Field(default=True, description="Enable request logging")
+    enable_response_logging: bool = Field(default=True, description="Enable response logging")
+    max_body_size: int = Field(default=1024 * 1024, description="Maximum body size to log (bytes)")
     
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
         case_sensitive = False
 
 

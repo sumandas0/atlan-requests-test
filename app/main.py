@@ -1,184 +1,180 @@
-"""FastAPI application with S3 logging middleware."""
+"""Main FastAPI application."""
 
 import logging
-from contextlib import asynccontextmanager
+import uuid
+from datetime import datetime
+from typing import Dict
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config.settings import settings
-from app.middleware.s3_logging import create_s3_logging_middleware
-from app.services.endpoint_matcher import EndpointMatcher
+from app.models.schemas import HealthResponse, ErrorResponse, LogEntry, RequestData, ResponseData
 from app.services.s3_client import s3_service
 
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format=settings.log_format
 )
+
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
-    logger.info("Starting FastAPI application")
-    
-    # Test S3 connection on startup
-    try:
-        async with s3_service as service:
-            connection_ok = await service.test_connection()
-            if connection_ok:
-                logger.info("S3 connection test passed")
-            else:
-                logger.warning("S3 connection test failed - logging may not work")
-    except Exception as e:
-        logger.error(f"Failed to test S3 connection: {e}")
-    
-    yield
-    
-    logger.info("Shutting down FastAPI application")
-
 
 # Create FastAPI app
 app = FastAPI(
-    title="Atlan Requests Middleware",
-    description="Lightweight middleware for logging requests and responses to S3",
-    version="0.1.0",
-    lifespan=lifespan
+    title=settings.app_name,
+    version=settings.app_version,
+    description="Lightweight FastAPI middleware for storing requests/responses in S3",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
-# Add S3 logging middleware
-app.add_middleware(create_s3_logging_middleware(enable_logging=settings.enable_middleware))
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.get("/health")
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    """Middleware to log requests and responses to S3."""
+    request_id = str(uuid.uuid4())
+    start_time = datetime.utcnow()
+    
+    # Add request ID to request state
+    request.state.request_id = request_id
+    
+    # Create request data
+    request_data = RequestData(
+        method=request.method,
+        url=str(request.url),
+        headers=dict(request.headers),
+        query_params=dict(request.query_params),
+        client_ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    
+    # Try to get request body if it's small enough
+    if settings.enable_request_logging:
+        try:
+            body = await request.body()
+            if len(body) <= settings.max_body_size:
+                request_data.body = body.decode("utf-8", errors="ignore")
+        except Exception as e:
+            logger.warning(f"Failed to read request body: {e}")
+    
+    # Process the request
+    response = await call_next(request)
+    
+    # Calculate processing time
+    end_time = datetime.utcnow()
+    processing_time_ms = (end_time - start_time).total_seconds() * 1000
+    
+    # Create response data
+    response_data = ResponseData(
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        processing_time_ms=processing_time_ms,
+    )
+    
+    # Create log entry
+    log_entry = LogEntry(
+        request_id=request_id,
+        timestamp=start_time,
+        request=request_data,
+        response=response_data,
+    )
+    
+    # Log to S3 asynchronously (don't block the response)
+    if settings.enable_request_logging or settings.enable_response_logging:
+        try:
+            async with s3_service as s3:
+                await s3.upload_log_entry(log_entry)
+        except Exception as e:
+            logger.error(f"Failed to log request to S3: {e}")
+    
+    # Add request ID to response headers
+    response.headers["X-Request-ID"] = request_id
+    
+    return response
+
+
+@app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
-    matcher = EndpointMatcher()
-    return {
-        "status": "healthy", 
-        "middleware_enabled": settings.enable_middleware,
-        "logging_config": matcher.get_matching_info()
-    }
-
-
-@app.get("/health/s3")
-async def s3_health_check():
-    """S3 connection health check."""
+    services = {}
+    
+    # Test S3 connection
     try:
-        async with s3_service as service:
-            connection_ok = await service.test_connection()
-            if connection_ok:
-                return {"status": "healthy", "s3_connection": "ok"}
-            else:
-                raise HTTPException(status_code=503, detail="S3 connection failed")
+        async with s3_service as s3:
+            s3_status = await s3.test_connection()
+        services["s3"] = "healthy" if s3_status else "unhealthy"
     except Exception as e:
+        services["s3"] = f"error: {str(e)}"
         logger.error(f"S3 health check failed: {e}")
-        raise HTTPException(status_code=503, detail=f"S3 health check failed: {str(e)}")
+    
+    return HealthResponse(
+        status="healthy",
+        version=settings.app_version,
+        services=services,
+    )
 
 
-@app.post("/api/example")
-async def example_endpoint(request: Request, data: dict = None):
-    """
-    Example endpoint to test the middleware.
-    
-    This endpoint will be logged if x-request-id header is provided.
-    """
-    request_id = request.headers.get("x-request-id")
-    
+@app.get("/")
+async def root():
+    """Root endpoint."""
     return {
-        "message": "Request processed successfully",
-        "request_id": request_id,
-        "received_data": data,
-        "middleware_active": settings.enable_middleware
+        "message": "Atlan Requests Middleware API",
+        "version": settings.app_version,
+        "docs": "/docs",
+        "health": "/health",
     }
 
 
-@app.get("/api/example/{item_id}")
-async def get_item(item_id: int, request: Request):
-    """
-    Example GET endpoint with path parameter.
-    """
-    request_id = request.headers.get("x-request-id")
-    
-    return {
-        "item_id": item_id,
-        "request_id": request_id,
-        "status": "found"
-    }
+@app.get("/ping")
+async def ping():
+    """Simple ping endpoint for testing."""
+    return {"message": "pong", "timestamp": datetime.utcnow().isoformat()}
 
 
-@app.post("/search/indexsearch")
-async def index_search(request: Request, query: dict = None):
-    """
-    Example search endpoint that WILL be logged (configured endpoint + POST method).
-    """
-    request_id = request.headers.get("x-request-id")
-    
-    return {
-        "message": "Search completed",
-        "request_id": request_id,
-        "query": query,
-        "results": ["result1", "result2"],
-        "logged_to_s3": True
-    }
-
-
-@app.post("/entity/lineage")
-async def entity_lineage(request: Request, entity_data: dict = None):
-    """
-    Example lineage endpoint that WILL be logged (configured endpoint + POST method).
-    """
-    request_id = request.headers.get("x-request-id")
-    
-    return {
-        "message": "Lineage retrieved",
-        "request_id": request_id,
-        "entity_data": entity_data,
-        "lineage": {"upstream": [], "downstream": []},
-        "logged_to_s3": True
-    }
-
-
-@app.get("/search/indexsearch")
-async def index_search_get(request: Request):
-    """
-    Example search endpoint that will NOT be logged (GET method not configured).
-    """
-    request_id = request.headers.get("x-request-id")
-    
-    return {
-        "message": "Search metadata",
-        "request_id": request_id,
-        "logged_to_s3": False,
-        "reason": "GET method not configured for logging"
-    }
-
-
-@app.post("/other/endpoint")
-async def other_endpoint(request: Request, data: dict = None):
-    """
-    Example endpoint that will NOT be logged (endpoint not configured).
-    """
-    request_id = request.headers.get("x-request-id")
-    
-    return {
-        "message": "Other endpoint processed",
-        "request_id": request_id,
-        "data": data,
-        "logged_to_s3": False,
-        "reason": "Endpoint not configured for logging"
-    }
+@app.post("/echo")
+async def echo(request: Request):
+    """Echo endpoint that returns the request data (useful for testing)."""
+    try:
+        body = await request.body()
+        return {
+            "method": request.method,
+            "url": str(request.url),
+            "headers": dict(request.headers),
+            "query_params": dict(request.query_params),
+            "body": body.decode("utf-8", errors="ignore") if body else None,
+            "request_id": getattr(request.state, "request_id", None),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to process request: {str(e)}")
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler."""
-    logger.error(f"Unhandled exception: {exc}")
+    request_id = getattr(request.state, "request_id", None)
+    
+    logger.error(f"Unhandled exception for request {request_id}: {exc}", exc_info=True)
+    
+    error_response = ErrorResponse(
+        error="Internal server error",
+        detail=str(exc) if settings.debug else "An unexpected error occurred",
+        request_id=request_id,
+    )
+    
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"}
+        content=error_response.model_dump(),
     )
 
 
@@ -189,6 +185,6 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        log_level=settings.log_level.lower()
+        reload=settings.debug,
+        log_level=settings.log_level.lower(),
     )
