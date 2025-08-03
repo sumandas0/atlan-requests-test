@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlas
+  labels:
+    name: atlas
+    app.kubernetes.io/name: atlas
+    app.kubernetes.io/part-of: atlan-middleware

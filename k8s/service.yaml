@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlan-middleware-service
+  namespace: atlas
+  labels:
+    app: atlan-middleware
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: atlan-middleware
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlan-middleware-nodeport
+  namespace: atlas
+  labels:
+    app: atlan-middleware
+spec:
+  type: NodePort
+  ports:
+  - port: 8000
+    targetPort: 8000
+    nodePort: 30080
+    protocol: TCP
+    name: http
+  selector:
+    app: atlan-middleware
