@@ -1,5 +1,5 @@
 # Multi-stage Docker build for FastAPI S3 middleware
-FROM python:3.11-slim as builder
+FROM python:3.13-slim as builder
 
 # Install uv for fast package management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -14,7 +14,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-cache
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Install security updates and clean up
 RUN apt-get update && \
