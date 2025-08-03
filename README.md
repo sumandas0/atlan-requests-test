@@ -13,6 +13,7 @@ This middleware addresses critical needs in modern API management:
 - **🛡️ Security & Compliance** - Maintain detailed logs for security audits, regulatory compliance (GDPR, SOX, etc.)
 - **🐛 Debugging & Troubleshooting** - Capture request/response data to diagnose issues in production
 - **📊 Data Lake Integration** - Feed API interaction data into data lakes for machine learning and analytics
+- **🗂️ Organized Storage** - Simple date-based folder structure for easy log retrieval
 
 ### When to Use This
 
@@ -257,6 +258,30 @@ The application consists of:
 3. **Response Capture** - Intercepts the response before returning to client
 4. **Async Logging** - Logs structured data to S3 without blocking the response
 5. **Request ID Tracking** - Adds unique request IDs for tracing
+
+### S3 Storage Structure
+
+Logs are organized in S3 using a simple date-based folder structure:
+
+```
+s3://your-bucket/
+└── request-logs/
+    ├── 2025-08-03/
+    │   ├── abc123-def456-ghi789.json
+    │   ├── xyz789-uvw456-rst123.json
+    │   └── ...
+    ├── 2025-08-04/
+    │   ├── mno345-pqr678-stu901.json
+    │   └── ...
+    └── 2025-08-05/
+        └── ...
+```
+
+**Benefits of this structure:**
+- Easy to query logs by date
+- Simple to implement data retention policies
+- Efficient for analytics queries over time ranges
+- Compatible with AWS Athena, Glue, and other analytics tools
 
 ## License
 

@@ -73,9 +73,9 @@ class S3LoggingService:
             True if upload succeeded, False otherwise
         """
         try:
-            # Generate S3 key
-            timestamp = log_entry.timestamp.strftime('%Y/%m/%d/%H')
-            s3_key = f"{settings.s3_key_prefix}{timestamp}/{log_entry.request_id}.json"
+            # Generate S3 key with date-only pattern (no nested folders)
+            date_only = log_entry.timestamp.strftime('%Y-%m-%d')
+            s3_key = f"{settings.s3_key_prefix}{date_only}/{log_entry.request_id}.json"
             
             # Convert to JSON
             log_data = log_entry.model_dump_json(indent=2)
