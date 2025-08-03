@@ -1,0 +1,16 @@
+# Global owners
+* @atlan-team
+
+# Kubernetes configurations
+k8s/ @atlan-team @devops-team
+
+# GitHub Actions workflows
+.github/workflows/ @atlan-team @devops-team
+
+# Security configurations
+.github/workflows/security.yml @security-team
+Dockerfile @security-team
+
+# Documentation
+*.md @docs-team @atlan-team
+docs/ @docs-team

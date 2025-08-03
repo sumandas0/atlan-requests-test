@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atlan-middleware
+  labels:
+    name: atlan-middleware
+    app.kubernetes.io/name: atlan-requests-middleware
+    app.kubernetes.io/component: namespace

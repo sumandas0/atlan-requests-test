@@ -1,0 +1,126 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        uv sync --group dev
+
+    - name: Lint with ruff
+      run: |
+        uv run ruff check app/ tests/
+
+    - name: Format check with black
+      run: |
+        uv run black --check app/ tests/
+
+    - name: Type check with mypy (if available)
+      run: |
+        if uv pip list | grep -q mypy; then
+          uv run mypy app/
+        else
+          echo "mypy not installed, skipping type check"
+        fi
+      continue-on-error: true
+
+    - name: Test with pytest
+      env:
+        AWS_ROLE_ARN: arn:aws:iam::123456789012:role/test-role
+        S3_BUCKET_NAME: test-bucket
+      run: |
+        uv run pytest tests/ -v --tb=short
+
+    - name: Test import
+      env:
+        AWS_ROLE_ARN: arn:aws:iam::123456789012:role/test-role
+        S3_BUCKET_NAME: test-bucket
+      run: |
+        uv run python -c "from app.main import app; print('✅ Import successful')"
+
+  container-test:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build container image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: atlan-requests-middleware:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Test container health
+      run: |
+        # Start container
+        docker run -d --name test-container -p 8000:8000 \
+          -e AWS_ROLE_ARN="arn:aws:iam::123456789012:role/test-role" \
+          -e S3_BUCKET_NAME="test-bucket" \
+          atlan-requests-middleware:test
+
+        # Wait for startup
+        sleep 10
+
+        # Test health endpoint
+        curl -f http://localhost:8000/health
+
+        # Test configured endpoint
+        response=$(curl -s -X POST http://localhost:8000/search/indexsearch \
+          -H "x-request-id: ci-test-123" \
+          -H "Content-Type: application/json" \
+          -d '{"query": "test"}')
+        
+        echo "$response" | jq .
+        
+        # Verify selective logging works
+        if echo "$response" | jq -r '.logged_to_s3' | grep -q "true"; then
+          echo "✅ Selective logging working"
+        else
+          echo "❌ Selective logging failed"
+          exit 1
+        fi
+
+        # Test non-configured endpoint
+        response=$(curl -s -X POST http://localhost:8000/other/endpoint \
+          -H "x-request-id: ci-test-456" \
+          -H "Content-Type: application/json" \
+          -d '{"test": "data"}')
+        
+        if echo "$response" | jq -r '.logged_to_s3' | grep -q "false"; then
+          echo "✅ Non-configured endpoint correctly not logged"
+        else
+          echo "❌ Non-configured endpoint behavior incorrect"
+          exit 1
+        fi
+
+        # Cleanup
+        docker stop test-container
+        docker rm test-container
